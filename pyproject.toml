@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "bug-triage-openenv"
+version = "1.0.0"
+description = "A real-world OpenEnv environment for bug report triage"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core>=0.2.3",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "openai",
+    "pyyaml",
+    "httpx",
+    "python-dotenv",
+]
+
+[project.entry-points."openenv.environments"]
+bug-triage-openenv = "env.environment:BugTriageEnv"
+
+[tool.openenv]
+name = "bug-triage-openenv"
+version = "1.0.0"
+description = "Bug Report Triage OpenEnv Environment"
+environment_class = "env.environment:BugTriageEnv"
+action_class = "env.models:BugTriageAction"
+observation_class = "env.models:BugTriageObservation"
