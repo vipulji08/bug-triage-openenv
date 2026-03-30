@@ -1,101 +1,34 @@
 name: bug-triage-openenv
 version: "1.0.0"
-description: >
-  A real-world OpenEnv environment that simulates bug report triage,
-  a daily task performed by software engineering teams. An AI agent
-  must read incoming bug reports and correctly assign priority, category,
-  team, detect duplicates, and identify invalid reports.
+description: "A real-world OpenEnv environment for bug report triage. AI agents learn to assign priority, category, and team to software bug reports."
+author: vipult008
 
-author: hackathon-participant
-tags:
-  - openenv
-  - bug-triage
-  - software-engineering
-  - real-world
+environment:
+  class: BugTriageEnv
+  module: env.environment
 
-domain: software_engineering
-task_type: classification_and_routing
+observation:
+  type: BugTriageObservation
+  module: env.models
 
-observation_space:
-  type: structured
-  fields:
-    - name: current_bug
-      type: BugReport
-      description: "The bug report to triage right now"
-    - name: inbox_count
-      type: integer
-      description: "Number of bugs remaining in inbox"
-    - name: triaged_count
-      type: integer
-      description: "Number of bugs already triaged"
-    - name: task_goal
-      type: string
-      description: "Natural language description of what to accomplish"
-    - name: available_actions
-      type: list[string]
-      description: "List of valid action types"
-    - name: last_action_result
-      type: string
-      description: "Feedback from previous action"
-
-action_space:
-  type: structured
-  fields:
-    - name: action_type
-      type: string
-      enum: [assign_priority, assign_category, assign_team, mark_duplicate, request_info, close_invalid, skip]
-    - name: value
-      type: string
-      description: "Value for the action (e.g., 'critical' for assign_priority)"
-    - name: bug_id
-      type: string
-      description: "ID of the bug to act on"
+action:
+  type: BugTriageAction
+  module: env.models
 
 tasks:
   - id: easy
-    name: "Bug Triage - Easy"
-    description: "Assign priority and category to 5 clearly-described bug reports"
+    description: "Assign priority and category to 5 bug reports"
     difficulty: 1
-    num_bugs: 5
-    max_steps: 15
-    grader: grade_easy_task
-    score_range: [0.0, 1.0]
 
   - id: medium
-    name: "Bug Triage - Medium"
-    description: "Full triage with team assignment and duplicate detection across 6 bugs"
+    description: "Assign priority, category, team and detect duplicates"
     difficulty: 2
-    num_bugs: 6
-    max_steps: 25
-    grader: grade_medium_task
-    score_range: [0.0, 1.0]
 
   - id: hard
-    name: "Bug Triage - Hard"
-    description: "Complete triage of 8 bugs including invalid reports, info requests, security prioritization"
+    description: "Full triage including invalid reports and info requests"
     difficulty: 3
-    num_bugs: 8
-    max_steps: 35
-    grader: grade_hard_task
-    score_range: [0.0, 1.0]
 
-reward:
-  type: shaped
-  description: >
-    Immediate heuristic reward after each action (0.0-1.0),
-    plus final grader score at episode end. Partial credit
-    for close priority estimates. Penalty for marking valid
-    bugs as invalid.
-  range: [0.0, 1.0]
-  sparse: false
-
-api:
-  endpoints:
-    reset: POST /reset
-    step: POST /step
-    state: GET /state
-
-deployment:
-  platform: huggingface_spaces
-  framework: fastapi
-  port: 7860
+tags:
+  - openenv
+  - bug-triage
+  - real-world
