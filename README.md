@@ -1,3 +1,17 @@
+---
+title: Bug Triage OpenEnv
+emoji: 🐛
+colorFrom: green
+colorTo: teal
+sdk: docker
+app_port: 7860
+tags:
+  - openenv
+  - reinforcement-learning
+  - bug-triage
+pinned: false
+---
+
 # 🐛 Bug Triage OpenEnv
 
 > An OpenEnv-compliant environment for training AI agents on real-world software bug report triage.
