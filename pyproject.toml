@@ -18,6 +18,9 @@ dependencies = [
     "python-dotenv",
 ]
 
+[project.scripts]
+server = "server.app:main"
+
 [project.entry-points."openenv.environments"]
 bug-triage-openenv = "env.environment:BugTriageEnv"
 
