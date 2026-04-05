@@ -11,6 +11,8 @@ COPY . .
 
 RUN touch env/__init__.py server/__init__.py
 
+ENV PYTHONPATH=/app
+
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
