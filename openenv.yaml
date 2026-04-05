@@ -1,6 +1,6 @@
 name: bug-triage-openenv
 version: "1.0.0"
-description: "A real-world OpenEnv environment for bug report triage. AI agents learn to assign priority, category, and team to software bug reports."
+description: "Real-world OpenEnv environment for bug report triage"
 author: vipult008
 
 environment:
@@ -19,11 +19,9 @@ tasks:
   - id: easy
     description: "Assign priority and category to 5 bug reports"
     difficulty: 1
-
   - id: medium
     description: "Assign priority, category, team and detect duplicates"
     difficulty: 2
-
   - id: hard
     description: "Full triage including invalid reports and info requests"
     difficulty: 3
