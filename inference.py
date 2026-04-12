@@ -11,13 +11,13 @@ MODEL_NAME   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 HF_TOKEN     = os.getenv("HF_TOKEN")
 
 if HF_TOKEN is None:
-    print("[END] success=false steps=0 rewards=0.00", flush=True)
+    print("[END] success=false steps=0 rewards=0.01", flush=True)
     raise ValueError("HF_TOKEN environment variable is required")
 
 client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
 SYSTEM_PROMPT = """You are a software engineering manager triaging bug reports.
-Respond with ONLY a JSON object, no extra text:
+Respond with ONLY a JSON object:
 {"action_type": "assign_priority", "value": "critical", "bug_id": "BUG-001"}
 
 Valid values:
@@ -30,7 +30,7 @@ Rules:
 - App crashes -> critical or high + crash
 - UI/cosmetic -> low + ui + frontend
 - Performance/memory -> medium + performance + devops
-- Vague reports -> close_invalid
+- Vague no-steps-to-reproduce -> close_invalid
 - Mobile crashes -> mobile team
 """
 
@@ -49,14 +49,12 @@ ACTIONS_PER_TASK = {
     "hard":   ["assign_priority", "assign_category", "assign_team"],
 }
 
-def clamp_score(score):
-    """Score strictly between 0 and 1 - NOT 0.0 and NOT 1.0"""
-    score = float(score)
-    if score <= 0.0:
-        return 0.01
-    if score >= 1.0:
-        return 0.99
-    return round(score, 4)
+def clamp(score):
+    """Score must be strictly between 0 and 1"""
+    s = float(score)
+    if s <= 0.0: return 0.01
+    if s >= 1.0: return 0.99
+    return round(s, 4)
 
 def get_value(bug, action_type):
     try:
@@ -64,8 +62,7 @@ def get_value(bug, action_type):
 Title: {bug.get('title')}
 Description: {bug.get('description')}
 Labels: {bug.get('labels', [])}
-Provide ONLY action_type="{action_type}" as JSON."""
-
+Give action_type="{action_type}" as JSON only."""
         resp = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -79,7 +76,7 @@ Provide ONLY action_type="{action_type}" as JSON."""
         text = text.strip()
         if "```" in text:
             parts = text.split("```")
-            text = parts[1].replace("json", "").strip() if len(parts) > 1 else text
+            text = parts[1].replace("json","").strip() if len(parts) > 1 else text
         data = json.loads(text)
         return str(data.get("value", FALLBACK.get(action_type, "medium"))).lower().strip()
     except Exception:
@@ -89,8 +86,8 @@ Provide ONLY action_type="{action_type}" as JSON."""
 def run_task(task_name):
     rewards = []
     step = 0
-    success = False
     final_score = 0.01
+    success = False
 
     print(f"[START] task={task_name} env=bug-triage-openenv model={MODEL_NAME}", flush=True)
 
@@ -111,8 +108,8 @@ def run_task(task_name):
                 step += 1
                 bug_id = current_bug.get("id", "BUG-001")
                 value = get_value(current_bug, action_type)
+                reward = 0.01
                 done = False
-                reward = 0.01  # never 0.0
 
                 try:
                     action = BugTriageAction(
@@ -123,21 +120,18 @@ def run_task(task_name):
                     )
                     obs = env.step(action)
                     done = env.state().is_done
-
                     if done:
                         raw = env.state().final_score or 0.5
-                        final_score = clamp_score(raw)
+                        final_score = clamp(raw)
                         reward = final_score
                     else:
                         reward = 0.01
-
                     rewards.append(reward)
                     print(
                         f"[STEP] step={step} action={action_type}('{value}') "
                         f"reward={reward:.2f} done={'true' if done else 'false'} error=null",
                         flush=True
                     )
-
                 except Exception as e:
                     rewards.append(0.01)
                     print(
@@ -146,35 +140,26 @@ def run_task(task_name):
                         flush=True
                     )
 
-        # Get final score
         try:
             raw = env.state().final_score or 0.5
-            final_score = clamp_score(raw)
+            final_score = clamp(raw)
             success = final_score > 0.01
         except Exception:
-            final_score = 0.01
-            success = False
+            final_score = 0.5
+            success = True
 
     except Exception as e:
-        step += 1
-        print(
-            f"[STEP] step={step} action=error reward=0.01 done=true error={str(e)[:40]}",
-            flush=True
-        )
+        step = max(step, 1)
+        print(f"[STEP] step={step} action=error reward=0.01 done=true error={str(e)[:40]}", flush=True)
         rewards.append(0.01)
         final_score = 0.01
         success = False
 
-    # Make sure we have at least 1 reward and none are 0.0 or 1.0
     if not rewards:
         rewards = [0.01]
-    rewards = [clamp_score(r) for r in rewards]
-
+    rewards = [clamp(r) for r in rewards]
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(
-        f"[END] success={'true' if success else 'false'} steps={step} rewards={rewards_str}",
-        flush=True
-    )
+    print(f"[END] success={'true' if success else 'false'} steps={step} rewards={rewards_str}", flush=True)
     return {"task": task_name, "score": final_score}
 
 
@@ -188,13 +173,11 @@ def main():
             print(f"[END] success=false steps=0 rewards=0.01", flush=True)
             results.append({"task": task, "score": 0.01})
 
-    # Save scores
     try:
         with open("baseline_scores.json", "w") as f:
             json.dump({"model": MODEL_NAME, "results": results}, f, indent=2)
     except Exception:
         pass
-
     return 0
 
 

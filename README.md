@@ -22,7 +22,7 @@ A real-world OpenEnv environment for training AI agents on software bug report t
 |------|------|---------|
 | easy | 5 | priority + category |
 | medium | 6 | priority + category + team + duplicate |
-| hard | 8 | full triage + invalid + info request |
+| hard | 8 | full triage |
 
 ## Setup
 
@@ -31,9 +31,9 @@ pip install -r requirements.txt
 python server/app.py
 ```
 
-## Run Inference
+## Inference
 
 ```bash
-export HFTOKEN=your_token
+export HF_TOKEN=your_token
 python inference.py
 ```
