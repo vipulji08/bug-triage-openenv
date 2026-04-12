@@ -1,6 +1,3 @@
-"""
-server/app.py - Main server entry point
-"""
 import os
 import uvicorn
 from openenv.core.env_server import create_fastapi_app
