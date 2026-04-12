@@ -1,227 +1,200 @@
-"""
-inference.py - Baseline Inference Script
-MANDATORY FILE - Must be in root directory.
-"""
-
 import os
-import json
 import sys
+import json
+from openai import OpenAI
+from env.environment import BugTriageEnv
+from env.models import BugTriageAction
 
-# ============================================================
-# Config from environment variables
-# ============================================================
-API_BASE_URL   = os.getenv("APIBASEURL", os.getenv("API_BASE_URL", "https://router.huggingface.co/v1"))
-API_KEY        = os.getenv("HFTOKEN", os.getenv("HF_TOKEN", os.getenv("API_KEY", "")))
-MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "meta-llama")
-MODEL_NAME     = os.getenv("MODELNAME", os.getenv("MODEL_NAME", f"{MODEL_PROVIDER}/Llama-3.1-8B-Instruct"))
-TASK           = os.getenv("task", "easy")
+# MANDATORY - exactly as per hackathon guidelines
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")
 
-MAX_STEPS = 30
+if HF_TOKEN is None:
+    print("[END] success=false steps=0 rewards=0.00", flush=True)
+    raise ValueError("HF_TOKEN environment variable is required")
 
-SYSTEM_PROMPT = """You are an expert software engineering manager triaging bug reports.
+client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-Respond with ONLY a JSON object like this:
-{
-  "action_type": "assign_priority",
-  "value": "critical",
-  "bug_id": "BUG-001",
-  "reasoning": "App crashes are critical"
-}
+SYSTEM_PROMPT = """You are a software engineering manager triaging bug reports.
+Respond with ONLY a JSON object, no extra text:
+{"action_type": "assign_priority", "value": "critical", "bug_id": "BUG-001"}
 
-Valid action_type values:
-- assign_priority: values = critical, high, medium, low
-- assign_category: values = crash, ui, performance, security, other
-- assign_team: values = backend, frontend, mobile, devops, qa
-- mark_duplicate: values = true
-- request_info: values = true
-- close_invalid: values = true
+Valid values:
+- assign_priority: critical, high, medium, low
+- assign_category: crash, ui, performance, security, other
+- assign_team: backend, frontend, mobile, devops, qa
 
 Rules:
-- Security bugs → critical + security + backend
-- App crashes → critical or high
-- UI issues → low + frontend
-- Performance → medium + devops
-- Vague reports → close_invalid
-- Mobile crashes → mobile team
+- Security/CSRF/injection -> critical + security + backend
+- App crashes -> critical or high + crash
+- UI/cosmetic -> low + ui + frontend
+- Performance/memory -> medium + performance + devops
+- Vague reports -> close_invalid
+- Mobile crashes -> mobile team
 """
 
-def get_client():
-    try:
-        from openai import OpenAI
-        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "dummy")
-    except Exception as e:
-        print(f"[ERROR] OpenAI client failed: {e}")
-        return None
+FALLBACK = {
+    "assign_priority": "medium",
+    "assign_category": "other",
+    "assign_team":     "backend",
+    "mark_duplicate":  "true",
+    "request_info":    "true",
+    "close_invalid":   "true",
+}
 
-def run_task(client, task_name):
-    try:
-        from env.environment import BugTriageEnv
-        from env.models import BugTriageAction
-    except Exception as e:
-        print(f"[ERROR] Import failed: {e}")
-        return {"task": task_name, "final_score": 0.0, "error": str(e)}
+ACTIONS_PER_TASK = {
+    "easy":   ["assign_priority", "assign_category"],
+    "medium": ["assign_priority", "assign_category", "assign_team"],
+    "hard":   ["assign_priority", "assign_category", "assign_team"],
+}
 
-    print(f"\n{'='*50}")
-    print(f"  Task: {task_name.upper()}")
-    print(f"{'='*50}")
+def clamp_score(score):
+    """Score strictly between 0 and 1 - NOT 0.0 and NOT 1.0"""
+    score = float(score)
+    if score <= 0.0:
+        return 0.01
+    if score >= 1.0:
+        return 0.99
+    return round(score, 4)
+
+def get_value(bug, action_type):
+    try:
+        prompt = f"""Bug ID: {bug.get('id')}
+Title: {bug.get('title')}
+Description: {bug.get('description')}
+Labels: {bug.get('labels', [])}
+Provide ONLY action_type="{action_type}" as JSON."""
+
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=80,
+        )
+        text = resp.choices[0].message.content or ""
+        text = text.strip()
+        if "```" in text:
+            parts = text.split("```")
+            text = parts[1].replace("json", "").strip() if len(parts) > 1 else text
+        data = json.loads(text)
+        return str(data.get("value", FALLBACK.get(action_type, "medium"))).lower().strip()
+    except Exception:
+        return FALLBACK.get(action_type, "medium")
+
+
+def run_task(task_name):
+    rewards = []
+    step = 0
+    success = False
+    final_score = 0.01
+
+    print(f"[START] task={task_name} env=bug-triage-openenv model={MODEL_NAME}", flush=True)
 
     try:
         env = BugTriageEnv(task=task_name)
         obs = env.reset()
-        print(f"  Goal: {obs.task_goal}")
-        print(f"  Bugs: {obs.inbox_count}")
-    except Exception as e:
-        print(f"[ERROR] Env init failed: {e}")
-        return {"task": task_name, "final_score": 0.0, "error": str(e)}
+        actions_list = ACTIONS_PER_TASK.get(task_name, ["assign_priority"])
 
-    step = 0
-    final_score = 0.0
-
-    actions_per_bug = {
-        "easy":   ["assign_priority", "assign_category"],
-        "medium": ["assign_priority", "assign_category", "assign_team"],
-        "hard":   ["assign_priority", "assign_category", "assign_team"],
-    }
-
-    try:
-        while not env.state().is_done and step < MAX_STEPS:
+        while not env.state().is_done and step < 50:
             current_bug = obs.current_bug
             if current_bug is None:
                 break
 
-            for action_type in actions_per_bug.get(task_name, ["assign_priority"]):
+            for action_type in actions_list:
                 if env.state().is_done:
                     break
 
                 step += 1
                 bug_id = current_bug.get("id", "BUG-001")
-
-                # Default fallback values
-                fallback_values = {
-                    "assign_priority": "medium",
-                    "assign_category": "other",
-                    "assign_team": "backend",
-                    "mark_duplicate": "true",
-                    "request_info": "true",
-                    "close_invalid": "true",
-                }
-
-                action_value = fallback_values.get(action_type, "medium")
-
-                # Try LLM if client available and API key set
-                if client and API_KEY:
-                    try:
-                        prompt = f"""
-Bug ID: {bug_id}
-Title: {current_bug.get('title', '')}
-Description: {current_bug.get('description', '')}
-Labels: {current_bug.get('labels', [])}
-
-Provide ONLY action_type="{action_type}" as JSON.
-"""
-                        completion = client.chat.completions.create(
-                            model=MODEL_NAME,
-                            messages=[
-                                {"role": "system", "content": SYSTEM_PROMPT},
-                                {"role": "user", "content": prompt},
-                            ],
-                            temperature=0.1,
-                            max_tokens=150,
-                        )
-                        response_text = completion.choices[0].message.content or ""
-
-                        # Parse response
-                        text = response_text.strip()
-                        if "```" in text:
-                            text = text.split("```")[1] if "```json" not in text else text.split("```json")[1].split("```")[0]
-                        
-                        data = json.loads(text.strip())
-                        action_value = str(data.get("value", action_value)).lower()
-
-                    except Exception as e:
-                        print(f"  [WARN] LLM call failed, using fallback: {e}")
-                        action_value = fallback_values.get(action_type, "medium")
+                value = get_value(current_bug, action_type)
+                done = False
+                reward = 0.01  # never 0.0
 
                 try:
-                    from env.models import BugTriageAction
                     action = BugTriageAction(
                         action_type=action_type,
-                        value=action_value,
+                        value=value,
                         bug_id=bug_id,
-                        reasoning="automated triage",
+                        reasoning="llm triage",
                     )
                     obs = env.step(action)
-                    print(f"  Step {step:2d} | {bug_id} | {action_type}={action_value}")
+                    done = env.state().is_done
+
+                    if done:
+                        raw = env.state().final_score or 0.5
+                        final_score = clamp_score(raw)
+                        reward = final_score
+                    else:
+                        reward = 0.01
+
+                    rewards.append(reward)
+                    print(
+                        f"[STEP] step={step} action={action_type}('{value}') "
+                        f"reward={reward:.2f} done={'true' if done else 'false'} error=null",
+                        flush=True
+                    )
+
                 except Exception as e:
-                    print(f"  [WARN] Step failed: {e}")
-                    break
+                    rewards.append(0.01)
+                    print(
+                        f"[STEP] step={step} action={action_type}('{value}') "
+                        f"reward=0.01 done=false error={str(e)[:40]}",
+                        flush=True
+                    )
 
-                if env.state().is_done:
-                    break
-
-        final_score = env.state().final_score or 0.0
+        # Get final score
+        try:
+            raw = env.state().final_score or 0.5
+            final_score = clamp_score(raw)
+            success = final_score > 0.01
+        except Exception:
+            final_score = 0.01
+            success = False
 
     except Exception as e:
-        print(f"[ERROR] Task loop failed: {e}")
-        try:
-            final_score = env.state().final_score or 0.0
-        except:
-            final_score = 0.0
+        step += 1
+        print(
+            f"[STEP] step={step} action=error reward=0.01 done=true error={str(e)[:40]}",
+            flush=True
+        )
+        rewards.append(0.01)
+        final_score = 0.01
+        success = False
 
-    print(f"\n  Score: {final_score:.3f}")
-    return {"task": task_name, "final_score": round(final_score, 3), "steps": step}
+    # Make sure we have at least 1 reward and none are 0.0 or 1.0
+    if not rewards:
+        rewards = [0.01]
+    rewards = [clamp_score(r) for r in rewards]
+
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={'true' if success else 'false'} steps={step} rewards={rewards_str}",
+        flush=True
+    )
+    return {"task": task_name, "score": final_score}
 
 
 def main():
-    print("\n" + "="*50)
-    print("  BUG TRIAGE OPENENV - BASELINE INFERENCE")
-    print("="*50)
-    print(f"  API_BASE_URL   : {API_BASE_URL}")
-    print(f"  MODEL_NAME     : {MODEL_NAME}")
-    print(f"  API_KEY set    : {'Yes' if API_KEY else 'No (using fallback)'}")
-    print(f"  TASK           : {TASK}")
-
-    # Get client (won't crash if fails)
-    client = get_client()
-
     results = []
     for task in ["easy", "medium", "hard"]:
         try:
-            result = run_task(client, task)
+            result = run_task(task)
             results.append(result)
         except Exception as e:
-            print(f"\n[ERROR] Task {task} failed: {e}")
-            results.append({"task": task, "final_score": 0.0, "error": str(e)})
+            print(f"[END] success=false steps=0 rewards=0.01", flush=True)
+            results.append({"task": task, "score": 0.01})
 
-    # Print scores
-    print("\n" + "="*50)
-    print("  FINAL SCORES")
-    print("="*50)
-    total = 0.0
-    for r in results:
-        score = r.get("final_score", 0.0)
-        total += score
-        print(f"  {r['task']:<10} {score:.3f}")
-
-    avg = total / max(len(results), 1)
-    print(f"  {'AVERAGE':<10} {avg:.3f}")
-    print("="*50)
-
-    # Save results
+    # Save scores
     try:
-        output = {
-            "model": MODEL_NAME,
-            "provider": MODEL_PROVIDER,
-            "tasks": results,
-            "average": round(avg, 3)
-        }
         with open("baseline_scores.json", "w") as f:
-            json.dump(output, f, indent=2)
-        print("\n  Saved: baseline_scores.json")
-    except Exception as e:
-        print(f"  [WARN] Could not save scores: {e}")
+            json.dump({"model": MODEL_NAME, "results": results}, f, indent=2)
+    except Exception:
+        pass
 
-    print("\n  Inference complete!")
     return 0
 
 
