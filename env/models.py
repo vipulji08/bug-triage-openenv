@@ -1,14 +1,7 @@
-"""
-models.py - Official OpenEnv typed models
-Inherits from openenv.core base classes (Action, Observation, State)
-"""
-
 from typing import Optional, List, Dict, Any
 from openenv.core.env_server.types import Action, Observation, State
 
-
 class BugTriageObservation(Observation):
-    """What the AI agent SEES at each step"""
     current_bug: Optional[Dict[str, Any]] = None
     inbox_count: int = 0
     triaged_count: int = 0
@@ -18,17 +11,13 @@ class BugTriageObservation(Observation):
     available_actions: List[str] = []
     session_history: List[Dict[str, Any]] = []
 
-
 class BugTriageAction(Action):
-    """What the AI agent DOES at each step"""
     action_type: str
     value: str
     bug_id: Optional[str] = None
     reasoning: Optional[str] = None
 
-
 class BugTriageState(State):
-    """Full internal state of the environment"""
     task_id: str
     task_name: str
     difficulty: str
